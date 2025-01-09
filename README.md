@@ -19,7 +19,7 @@ locally.
 
 ARM64 image can be downloaded from the DockerHub:
 ```
-docker pull echuraev/overleaf-full
+docker pull echuraev/overleaf-full:arm64
 ```
 
 ## Build steps
