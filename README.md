@@ -42,7 +42,7 @@ docker pull echuraev/overleaf-full
     This will build docker image with full texlive support.
 
 ## Acknowledgments
-- @tuetenk0pp thanks for the Dockerfile which includes full TEX Live
+- [@tuetenk0pp](https://github.com/tuetenk0pp/) thanks for the Dockerfile which includes full TEX Live
     installation.
-- @yu-i-i thanks for the branch with enabling changes tracking in the
+- [@yu-i-i](https://github.com/yu-i-i/) thanks for the branch with enabling changes tracking in the
     overleaf-community-edition.
