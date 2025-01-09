@@ -1,0 +1,403 @@
+From 96697182f4db4b9e6218daaef10b2b18e2735829 Mon Sep 17 00:00:00 2001
+From: yu-i-i <kla9555@gmail.com>
+Date: Tue, 3 Dec 2024 01:07:49 +0100
+Subject: [PATCH] Enable track changes and comments feature
+
+---
+ .../Features/Project/ProjectEditorHandler.js  |   2 +-
+ services/web/config/settings.defaults.js      |   1 +
+ .../hooks/use-review-panel-state.ts           |  19 +-
+ .../hooks/use-codemirror-scope.ts             |   2 +-
+ .../app/src/TrackChangesController.js         | 194 ++++++++++++++++++
+ .../app/src/TrackChangesRouter.js             |  72 +++++++
+ services/web/modules/track-changes/index.js   |   2 +
+ 7 files changed, 283 insertions(+), 9 deletions(-)
+ create mode 100644 services/web/modules/track-changes/app/src/TrackChangesController.js
+ create mode 100644 services/web/modules/track-changes/app/src/TrackChangesRouter.js
+ create mode 100644 services/web/modules/track-changes/index.js
+
+diff --git a/services/web/app/src/Features/Project/ProjectEditorHandler.js b/services/web/app/src/Features/Project/ProjectEditorHandler.js
+index a0d82a3bc9..cdfc6b924a 100644
+--- a/services/web/app/src/Features/Project/ProjectEditorHandler.js
++++ b/services/web/app/src/Features/Project/ProjectEditorHandler.js
+@@ -8,7 +8,7 @@ function mergeDeletedDocs(a, b) {
+ }
+ 
+ module.exports = ProjectEditorHandler = {
+-  trackChangesAvailable: false,
++  trackChangesAvailable: true,
+ 
+   buildProjectModelView(project, members, invites, deletedDocsFromDocstore) {
+     let owner, ownerFeatures
+diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
+index 0744e7c6b9..a3d5b09bbf 100644
+--- a/services/web/config/settings.defaults.js
++++ b/services/web/config/settings.defaults.js
+@@ -989,6 +989,7 @@ module.exports = {
+     'launchpad',
+     'server-ce-scripts',
+     'user-activate',
++    'track-changes',
+   ],
+   viewIncludes: {},
+ 
+diff --git a/services/web/frontend/js/features/ide-react/context/review-panel/hooks/use-review-panel-state.ts b/services/web/frontend/js/features/ide-react/context/review-panel/hooks/use-review-panel-state.ts
+index 082f466824..c2d6a31998 100644
+--- a/services/web/frontend/js/features/ide-react/context/review-panel/hooks/use-review-panel-state.ts
++++ b/services/web/frontend/js/features/ide-react/context/review-panel/hooks/use-review-panel-state.ts
+@@ -83,6 +83,7 @@ const formatUser = (user: any): any => {
+ 
+   if (id == null) {
+     return {
++      id: 'anonymous-user',
+       email: null,
+       name: 'Anonymous',
+       isSelf: false,
+@@ -280,16 +281,20 @@ function useReviewPanelState(): ReviewPanel.ReviewPanelState {
+           const tempUsers = {} as ReviewPanel.Value<'users'>
+           // Always include ourself, since if we submit an op, we might need to display info
+           // about it locally before it has been flushed through the server
+-          if (user?.id) {
+-            tempUsers[user.id] = formatUser(user)
++          if (user) {
++            if (user.id) {
++              tempUsers[user.id] = formatUser(user)
++            } else {
++              tempUsers['anonymous-user'] = formatUser(user)
++            }
+           }
+-
+           for (const user of usersResponse) {
+             if (user.id) {
+               tempUsers[user.id] = formatUser(user)
++            } else {
++              tempUsers['anonymous-user'] = formatUser(user)
+             }
+           }
+-
+           setUsers(tempUsers)
+         })
+         .catch(error => {
+@@ -526,9 +531,9 @@ function useReviewPanelState(): ReviewPanel.ReviewPanelState {
+     }
+   }, [currentDocument, regenerateTrackChangesId, resolvedThreadIds])
+ 
+-  const currentUserType = useCallback((): 'member' | 'guest' | 'anonymous' => {
++  const currentUserType = useCallback((): 'member' | 'guest' | 'anonymous-user' => {
+     if (!user) {
+-      return 'anonymous'
++      return 'anonymous-user'
+     }
+     if (project.owner._id === user.id) {
+       return 'member'
+@@ -581,7 +586,7 @@ function useReviewPanelState(): ReviewPanel.ReviewPanelState {
+   const setGuestsTCState = useCallback(
+     (newValue: boolean) => {
+       setTrackChangesOnForGuests(newValue)
+-      if (currentUserType() === 'guest' || currentUserType() === 'anonymous') {
++      if (currentUserType() === 'guest' || currentUserType() === 'anonymous-user') {
+         setWantTrackChanges(newValue)
+       }
+     },
+diff --git a/services/web/frontend/js/features/source-editor/hooks/use-codemirror-scope.ts b/services/web/frontend/js/features/source-editor/hooks/use-codemirror-scope.ts
+index 0c62e60f4e..7704611978 100644
+--- a/services/web/frontend/js/features/source-editor/hooks/use-codemirror-scope.ts
++++ b/services/web/frontend/js/features/source-editor/hooks/use-codemirror-scope.ts
+@@ -209,7 +209,7 @@ function useCodeMirrorScope(view: EditorView) {
+ 
+     if (currentDoc) {
+       if (trackChanges) {
+-        currentDoc.track_changes_as = userId || 'anonymous'
++        currentDoc.track_changes_as = userId || 'anonymous-user'
+       } else {
+         currentDoc.track_changes_as = null
+       }
+diff --git a/services/web/modules/track-changes/app/src/TrackChangesController.js b/services/web/modules/track-changes/app/src/TrackChangesController.js
+new file mode 100644
+index 0000000000..12cbb57da4
+--- /dev/null
++++ b/services/web/modules/track-changes/app/src/TrackChangesController.js
+@@ -0,0 +1,194 @@
++const ChatApiHandler = require('../../../../app/src/Features/Chat/ChatApiHandler')
++const ChatManager = require('../../../../app/src/Features/Chat/ChatManager')
++const EditorRealTimeController = require('../../../../app/src/Features/Editor/EditorRealTimeController')
++const SessionManager = require('../../../../app/src/Features/Authentication/SessionManager')
++const UserInfoManager = require('../../../../app/src/Features/User/UserInfoManager')
++const DocstoreManager = require('../../../../app/src/Features/Docstore/DocstoreManager')
++const DocumentUpdaterHandler = require('../../../../app/src/Features/DocumentUpdater/DocumentUpdaterHandler')
++const CollaboratorsGetter = require('../../../../app/src/Features/Collaborators/CollaboratorsGetter')
++const { Project } = require('../../../../app/src/models/Project')
++const pLimit = require('p-limit')
++
++function _transformId(doc) {
++  if (doc._id) {
++    doc.id = doc._id;
++    delete doc._id;
++  }
++  return doc;
++}
++
++const TrackChangesController = {
++  async trackChanges(req, res, next) {
++    try {
++      const { project_id } = req.params
++      let state = req.body.on || req.body.on_for
++      if (req.body.on_for_guests && !req.body.on) state.__guests__ = true
++      await Project.updateOne({_id: project_id}, {track_changes: state}).exec()  //do not wait?
++      EditorRealTimeController.emitToRoom(project_id, 'toggle-track-changes', state)
++      res.sendStatus(204)
++    } catch (err) {
++      next(err)
++    }
++  },
++  async acceptChanges(req, res, next) {
++    try {
++      const { project_id, doc_id } = req.params
++      const change_ids = req.body.change_ids
++      EditorRealTimeController.emitToRoom(project_id, 'accept-changes', doc_id, change_ids)
++      await DocumentUpdaterHandler.promises.acceptChanges(project_id, doc_id, change_ids)
++      res.sendStatus(204)
++    } catch (err) {
++      next(err)
++    }
++  },
++  async getAllRanges(req, res, next) {
++    try {
++      const { project_id } = req.params
++      // Flushing the project to mongo is not ideal. Is it possible to fetch the ranges from redis?
++      await DocumentUpdaterHandler.promises.flushProjectToMongo(project_id)
++      const ranges = await DocstoreManager.promises.getAllRanges(project_id)
++      res.json(ranges.map(_transformId))
++    } catch (err) {
++      next(err)
++    }
++  },
++  async getChangesUsers(req, res, next) {
++    try {
++      const { project_id } = req.params
++      const memberIds = await CollaboratorsGetter.promises.getMemberIds(project_id)
++      // FIXME: Fails to display names in changes made by former project collaborators.
++      // See the alternative below. However, it requires flushing the project to mongo, which is not ideal.
++      const limit = pLimit(3)
++      const users = await Promise.all(
++        memberIds.map(memberId =>
++          limit(async () => {
++            const user = await UserInfoManager.promises.getPersonalInfo(memberId)
++            return user
++          })
++        )
++      )
++      users.push({_id: null}) // An anonymous user won't cause any harm
++      res.json(users.map(_transformId))
++    } catch (err) {
++      next(err)
++    }
++  },
++/*
++  async getChangesUsers(req, res, next) {
++    try {
++      const { project_id } = req.params
++      await DocumentUpdaterHandler.promises.flushProjectToMongo(project_id)
++      const memberIds = new Set()
++      const ranges = await DocstoreManager.promises.getAllRanges(project_id)
++      ranges.forEach(range => {
++        ;[...range.ranges?.changes || [], ...range.ranges?.comments || []].forEach(item => {
++          memberIds.add(item.metadata?.user_id)
++        })
++      })
++      const limit = pLimit(3)
++      const users = await Promise.all(
++        [...memberIds].map(memberId =>
++          limit(async () => {
++	    if( memberId !== "anonymous-user") {
++              return await UserInfoManager.promises.getPersonalInfo(memberId)
++	    } else {
++	      return {_id: null}
++	    }
++          })
++        )
++      )
++      res.json(users.map(_transformId))
++    } catch (err) {
++      next(err)
++    }
++  },
++*/
++  async getThreads(req, res, next) {
++    try {
++      const { project_id } = req.params
++      const messages = await ChatApiHandler.promises.getThreads(project_id)
++      await ChatManager.promises.injectUserInfoIntoThreads(messages)
++      res.json(messages)
++    } catch (err) {
++      next(err)
++    }
++  },
++  async sendComment(req, res, next) {
++    try {
++      const { project_id, thread_id } = req.params
++      const { content } = req.body
++      const user_id = SessionManager.getLoggedInUserId(req.session)
++      if (!user_id) throw new Error('no logged-in user')
++      const message = await ChatApiHandler.promises.sendComment(project_id, thread_id, user_id, content)
++      message.user = await UserInfoManager.promises.getPersonalInfo(user_id)
++      EditorRealTimeController.emitToRoom(project_id, 'new-comment', thread_id, message)
++      res.sendStatus(204)
++    } catch (err) {
++      next(err);
++    }
++  },
++  async editMessage(req, res, next) {
++    try {
++      const { project_id, thread_id, message_id } = req.params
++      const { content } = req.body
++      const user_id = SessionManager.getLoggedInUserId(req.session)
++      if (!user_id) throw new Error('no logged-in user')
++      await ChatApiHandler.promises.editMessage(project_id, thread_id, message_id, user_id, content)
++      EditorRealTimeController.emitToRoom(project_id, 'edit-message', thread_id, message_id, content)
++      res.sendStatus(204)
++    } catch (err) {
++      next(err)
++    }
++  },
++  async deleteMessage(req, res, next) {
++    try {
++      const { project_id, thread_id, message_id } = req.params
++      await ChatApiHandler.promises.deleteMessage(project_id, thread_id, message_id)
++      EditorRealTimeController.emitToRoom(project_id, 'delete-message', thread_id, message_id)
++      res.sendStatus(204)
++    } catch (err) {
++      next(err)
++    }
++  },
++  async resolveThread(req, res, next) {
++    try {
++      const { project_id, doc_id, thread_id } = req.params
++      const user_id = SessionManager.getLoggedInUserId(req.session)
++      if (!user_id) throw new Error('no logged-in user')
++      const user = await UserInfoManager.promises.getPersonalInfo(user_id)
++      await ChatApiHandler.promises.resolveThread(project_id, thread_id, user_id)
++      EditorRealTimeController.emitToRoom(project_id, 'resolve-thread', thread_id, user)
++      await DocumentUpdaterHandler.promises.resolveThread(project_id, doc_id, thread_id, user_id)
++      res.sendStatus(204);
++    } catch (err) {
++      next(err);
++    }
++  },
++  async reopenThread(req, res, next) {
++    try {
++      const { project_id, doc_id, thread_id } = req.params
++      const user_id = SessionManager.getLoggedInUserId(req.session)
++      if (!user_id) throw new Error('no logged-in user')
++      await ChatApiHandler.promises.reopenThread(project_id, thread_id)
++      EditorRealTimeController.emitToRoom(project_id, 'reopen-thread', thread_id)
++      await DocumentUpdaterHandler.promises.reopenThread(project_id, doc_id, thread_id, user_id)
++      res.sendStatus(204)
++    } catch (err) {
++      next(err)
++    }
++  },
++  async deleteThread(req, res, next) {
++    try {
++      const { project_id, doc_id, thread_id } = req.params
++      const user_id = SessionManager.getLoggedInUserId(req.session)
++      if (!user_id) throw new Error('no logged-in user')
++      await ChatApiHandler.promises.deleteThread(project_id, thread_id)
++      EditorRealTimeController.emitToRoom(project_id, 'delete-thread', thread_id)
++      await DocumentUpdaterHandler.promises.deleteThread(project_id, doc_id, thread_id, user_id)
++      res.sendStatus(204)
++    } catch (err) {
++      next(err)
++    }
++  },
++}
++module.exports = TrackChangesController
+diff --git a/services/web/modules/track-changes/app/src/TrackChangesRouter.js b/services/web/modules/track-changes/app/src/TrackChangesRouter.js
+new file mode 100644
+index 0000000000..3791e251a1
+--- /dev/null
++++ b/services/web/modules/track-changes/app/src/TrackChangesRouter.js
+@@ -0,0 +1,72 @@
++const logger = require('@overleaf/logger')
++const AuthorizationMiddleware = require('../../../../app/src/Features/Authorization/AuthorizationMiddleware')
++const TrackChangesController = require('./TrackChangesController')
++
++module.exports = {
++  apply(webRouter) {
++    logger.debug({}, 'Init track-changes router')
++
++    webRouter.post('/project/:project_id/track_changes',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.trackChanges
++    )
++    webRouter.post('/project/:project_id/doc/:doc_id/changes/accept',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.acceptChanges
++    )
++    webRouter.get('/project/:project_id/ranges',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.getAllRanges
++    )
++    webRouter.get('/project/:project_id/changes/users',
++     AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.getChangesUsers
++    )
++    webRouter.get(
++      '/project/:project_id/threads',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.getThreads
++    )
++    webRouter.post(
++      '/project/:project_id/thread/:thread_id/messages',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.sendComment
++    )
++    webRouter.post(
++      '/project/:project_id/thread/:thread_id/messages/:message_id/edit',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.editMessage
++    )
++    webRouter.delete(
++      '/project/:project_id/thread/:thread_id/messages/:message_id',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.deleteMessage
++    )
++    webRouter.post(
++      '/project/:project_id/doc/:doc_id/thread/:thread_id/resolve',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.resolveThread
++    )
++    webRouter.post(
++      '/project/:project_id/doc/:doc_id/thread/:thread_id/reopen',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.reopenThread
++    )
++    webRouter.delete(
++      '/project/:project_id/doc/:doc_id/thread/:thread_id',
++      AuthorizationMiddleware.blockRestrictedUserFromProject,
++      AuthorizationMiddleware.ensureUserCanReadProject,
++      TrackChangesController.deleteThread
++    )
++  },
++}
+diff --git a/services/web/modules/track-changes/index.js b/services/web/modules/track-changes/index.js
+new file mode 100644
+index 0000000000..aa9e6a73da
+--- /dev/null
++++ b/services/web/modules/track-changes/index.js
+@@ -0,0 +1,2 @@
++const TrackChangesRouter = require('./app/src/TrackChangesRouter')
++module.exports = { router : TrackChangesRouter }
+-- 
+2.34.1
+
