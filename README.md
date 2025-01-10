@@ -41,6 +41,17 @@ docker pull echuraev/overleaf-full:arm64
 
     This will build docker image with full texlive support.
 
+## Docker compose for self-hosting
+If you want to deploy the Overleaf instance on your own server. You can use [docker-compose.yml](docker-compose.yml) file from this repository.
+In this file you should modify the following parameters and variables:
+- `volumes` - Change the local paths of all volumes to your local directory. In the file `/docker/overleaf` is used.
+- `OVERLEAF_ADMIN_EMAIL` - Admin email address.
+- `OVERLEAF_SITE_URL` - The full url to your Overleaf instance on the server.
+- `OVERLEAF_EMAIL_FROM_ADDRESS` - Email address which will be used to send messages to users from Overleaf.
+- `OVERLEAF_EMAIL_SMTP_USER` - Can be used the same address which was specified in `OVERLEAF_EMAIL_FROM_ADDRESS`.
+- `OVERLEAF_EMAIL_SMTP_PASS` - Password to the `OVERLEAF_EMAIL_SMTP_USER`.
+- If you are not using Google's smtp then you should also modify `OVERLEAF_EMAIL_SMTP_HOST` and `OVERLEAF_EMAIL_SMTP_PORT` variables.
+
 ## Acknowledgments
 - [@tuetenk0pp](https://github.com/tuetenk0pp/) thanks for the Dockerfile which includes full TEX Live
     installation.
