@@ -1,0 +1,102 @@
+# In the first run when all containers are run. It is necessary to create a user.
+# Run the following command in the terminal:
+#    $ sudo docker exec sharelatex /bin/bash -c "cd /var/www/sharelatex; grunt user:create-admin --email=your.email@gmail.com"
+
+services:
+    sharelatex:
+        restart: always # on-failure:5
+        image: echuraev/overleaf-full:arm64
+        container_name: sharelatex
+        depends_on:
+            mongo:
+                condition: service_healthy
+            redis:
+                condition: service_started
+        ports:
+            - 1234:80
+        links:
+            - mongo
+            - redis
+        stop_grace_period: 60s
+        volumes:
+            - /docker/overleaf/data:/var/lib/overleaf
+            - /docker/overleaf/logs:/var/log/overleaf
+        environment:
+            OVERLEAF_APP_NAME: Overleaf Community Edition
+            OVERLEAF_MONGO_URL: mongodb://mongo/sharelatex
+            OVERLEAF_REDIS_HOST: redis
+            REDIS_HOST: redis
+            ENABLED_LINKED_FILE_TYPES: 'project_file,project_output_file'
+            # Enables Thumbnail generation using ImageMagick
+            ENABLE_CONVERSIONS: 'true'
+            # Disables email confirmation requirement
+            EMAIL_CONFIRMATION_DISABLED: 'true'
+            # temporary fix for LuaLaTex compiles
+            # see https://github.com/overleaf/overleaf/issues/695
+            TEXMFVAR: /var/lib/overleaf/tmp/texmf-var
+            OVERLEAF_SITE_URL: https://overleaf.your.server.addr
+            OVERLEAF_NAV_TITLE: Overleaf self-hosted
+            OVERLEAF_ADMIN_EMAIL: admin@email.com
+            # OVERLEAF_LEFT_FOOTER: '[{"text": "Another page I want to link to can be found <a href=\"here\">here</a>"} ]'
+            # OVERLEAF_RIGHT_FOOTER: '[{"text": "Hello I am on the Right"} ]'
+            OVERLEAF_EMAIL_FROM_ADDRESS: from@email.com
+            # OVERLEAF_EMAIL_AWS_SES_ACCESS_KEY_ID:
+            # OVERLEAF_EMAIL_AWS_SES_SECRET_KEY:
+            OVERLEAF_EMAIL_SMTP_HOST: smtp.gmail.com
+            OVERLEAF_EMAIL_SMTP_PORT: 587
+            # OVERLEAF_EMAIL_SMTP_SECURE: false
+            OVERLEAF_EMAIL_SMTP_USER: from@gmail.com
+            OVERLEAF_EMAIL_SMTP_PASS: smtp_password
+            OVERLEAF_EMAIL_SMTP_TLS_REJECT_UNAUTH: true
+            OVERLEAF_EMAIL_SMTP_IGNORE_TLS: false
+            # OVERLEAF_EMAIL_SMTP_NAME: '127.0.0.1'
+            OVERLEAF_EMAIL_SMTP_LOGGER: true
+            # OVERLEAF_CUSTOM_EMAIL_FOOTER: "This system is run by department x"
+            # ENABLE_CRON_RESOURCE_DELETION: true
+            COMPILE_TIMEOUT: 300
+            TZ: 'Europe/Moscow'
+
+    mongo:
+        restart: always
+        image: mongo:5.0
+        container_name: mongo
+        command: ["mongod", "--ipv6", "--replSet", "rs0"]
+        expose:
+            - 27017
+        volumes:
+            - /docker/overleaf/db:/data/db
+        environment:
+            TZ: 'Europe/Moscow'
+        healthcheck:
+            test: echo 'db.stats().ok' | mongo localhost:27017/test --quiet
+            interval: 10s
+            timeout: 10s
+            retries: 5
+        extra_hosts:
+            - "mongo:127.0.0.1"
+
+    mongo-init:
+        restart: "no"
+        image: mongo:5.0
+        depends_on:
+            mongo:
+                condition: service_healthy
+        entrypoint:
+            [
+                "mongo",
+                "--host",
+                "mongo:27017",
+                "--eval",
+                'rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]})',
+            ]
+
+    redis:
+        restart: always
+        image: redis:6.2
+        container_name: redis
+        expose:
+            - 6379
+        volumes:
+            - /docker/overleaf/redis:/data
+        environment:
+            TZ: 'Europe/Moscow'
