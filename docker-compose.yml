@@ -5,7 +5,7 @@
 services:
     sharelatex:
         restart: always # on-failure:5
-        image: echuraev/overleaf-full:arm64
+        image: echuraev/overleaf-full:x86-5.5.0-ext-v3
         container_name: sharelatex
         depends_on:
             mongo:
@@ -58,45 +58,26 @@ services:
 
     mongo:
         restart: always
-        image: mongo:5.0
+        image: mongo:6.0
         container_name: mongo
-        command: ["mongod", "--ipv6", "--replSet", "rs0"]
-        expose:
-            - 27017
+        command: ["--replSet", "rs0"]
         volumes:
             - /docker/overleaf/db:/data/db
         environment:
-            TZ: 'Europe/Moscow'
+          MONGO_INITDB_DATABASE: sharelatex
+        ports:
+            - 27017:27017
         healthcheck:
-            test: echo 'db.stats().ok' | mongo localhost:27017/test --quiet
-            interval: 10s
-            timeout: 10s
-            retries: 5
-        extra_hosts:
-            - "mongo:127.0.0.1"
-
-    mongo-init:
-        restart: "no"
-        image: mongo:5.0
-        depends_on:
-            mongo:
-                condition: service_healthy
-        entrypoint:
-            [
-                "mongo",
-                "--host",
-                "mongo:27017",
-                "--eval",
-                'rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]})',
-            ]
+            test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]}) }" | mongosh --port 27017 --quiet
+            interval: 5s
+            timeout: 30s
+            start_period: 0s
+            start_interval: 1s
+            retries: 30
 
     redis:
         restart: always
         image: redis:6.2
         container_name: redis
-        expose:
-            - 6379
         volumes:
             - /docker/overleaf/redis:/data
-        environment:
-            TZ: 'Europe/Moscow'

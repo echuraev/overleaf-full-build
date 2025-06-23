@@ -1,5 +1,5 @@
-# Docker file was taken from here: https://github.com/tuetenk0pp/sharelatex-full/blob/master/Dockerfile
-FROM sharelatex/sharelatex:main
+# Original Docker file was taken from here: https://github.com/tuetenk0pp/sharelatex-full/blob/master/Dockerfile
+FROM overleafcep/sharelatex:5.5.0-ext-v3
 
 SHELL ["/bin/bash", "-cx"]
 
